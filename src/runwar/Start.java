@@ -82,6 +82,7 @@ public class Start {
 	private static String PID;
 
 	private static String warPath;
+	private static String webXmlPath;
 	private static String contextPath = "/";
 	private static String host = "127.0.0.1";
 	private static int portNumber = 8088;
@@ -109,11 +110,15 @@ public class Start {
 	static TrayIcon trayIcon;
 	private static boolean debug = false;
 	private static File warFile;
+	private static File webXmlFile;
 	private static String iconImage = null;
 	private static DeploymentManager manager;
 	private static Undertow server;
+	private static String railoConfigWebDir = null;
+	private static String railoConfigServerDir = null;
 	public static final Set<String> loggers = new HashSet<String>(Arrays.asList(new String[] {
 			"RunwarLogger",
+			"global",
 			"org.jboss.logging",
 			"org.xnio.Xnio",
 			"org.xnio.nio.NioXnio",
@@ -207,7 +212,9 @@ public class Start {
             catch(Exception e) { }
         }
 		System.out.println(bar);
-		System.out.println("Starting - port:" + portNumber + " stop-port:" + socketNumber + " warpath: " + warPath);
+		String startingtext = "Starting - port:" + portNumber + " stop-port:" + socketNumber + " warpath: " + warPath;
+		System.out.println(startingtext);
+		log.info(startingtext);
 		portNumber = getPortOrErrorOut(portNumber,host);
 		socketNumber = getPortOrErrorOut(socketNumber,host);			
 		System.out.println("contextPath: " + contextPath);
@@ -219,7 +226,7 @@ public class Start {
 		File webinf = new File(warFile,"WEB-INF");
 		if(warFile.isDirectory() && webinf.exists()) {
 			libDirs = webinf.getAbsolutePath() + "/lib";
-			log.info("Using WEB-INF/lib of: " + libDirs);
+			log.info("Using existing WEB-INF/lib of: " + libDirs);
 		}
 		if(libDirs != null || jarURL != null) {
 			List<URL> cp=new ArrayList<URL>();
@@ -227,6 +234,7 @@ public class Start {
 				cp.addAll(getJarList(libDirs));
 			if(jarURL!=null)
 				cp.add(jarURL);
+			cp.addAll(getClassesList(new File(webinf,"/classes").getAbsolutePath()));
 			initClassLoader(cp);
 		}
 
@@ -237,66 +245,76 @@ public class Start {
 		if(!warFile.exists()) {
 			throw new RuntimeException("war does not exist: " + warFile.getAbsolutePath());
 		}
+		if(System.getProperty("coldfusion.home") == null)
+			System.setProperty("coldfusion.home",warFile.getAbsolutePath());
 		
 		if(warFile.isDirectory() && !webinf.exists()) {
-	        String webConfigDir = System.getProperty("railo.web.config.dir");
-	        if(webConfigDir == null) {
+	        if(railoConfigWebDir == null) {
 	        	File webConfigDirFile = new File(thisJarLocation.getParentFile(),"server/railo-web/");
-				webConfigDir = webConfigDirFile.getPath();
+				railoConfigWebDir = webConfigDirFile.getPath();
 	        }
-	        log.debug("railo.web.config.dir: " + webConfigDir);
-	        String serverConfigDir = System.getProperty("railo.server.config.dir");
-	        if(serverConfigDir == null) {
+	        log.debug("railo.web.config.dir: " + railoConfigWebDir);
+	        if(railoConfigServerDir == null) {
 	        	File serverConfigDirFile = new File(thisJarLocation.getParentFile(),"server/");
-	        	serverConfigDir = serverConfigDirFile.getAbsolutePath();
+	        	railoConfigServerDir = serverConfigDirFile.getAbsolutePath();
 	        }
-	        log.debug("railo.server.config.dir: " + serverConfigDir);
+	        log.debug("railo.server.config.dir: " + railoConfigServerDir);
 	        String webinfDir = System.getProperty("railo.webinf");
 	        if(webinfDir == null) {
-	        	webinfDir = new File(serverConfigDir,"WEB-INF/").getPath();
+	        	webinfDir = new File(railoConfigServerDir,"WEB-INF/").getPath();
 	        }
 	        log.debug("railo.webinf: " + webinfDir);
-			servletBuilder.setClassLoader(Start.class.getClassLoader());
-			Class cfmlServlet;
-			Class restServlet;
-			try{
-				cfmlServlet = servletBuilder.getClass().getClassLoader().loadClass("railo.loader.servlet.CFMLServlet");
-			} catch (java.lang.ClassNotFoundException e) {
-				cfmlServlet = _classLoader.loadClass("railo.loader.servlet.CFMLServlet");
-			}
-			try{
-				restServlet = servletBuilder.getClass().getClassLoader().loadClass("railo.loader.servlet.RestServlet");
-			} catch (java.lang.ClassNotFoundException e) {
-				restServlet = _classLoader.loadClass("railo.loader.servlet.RestServlet");
-			}
-			log.debug("loaded servlet classes");
-			servletBuilder
-            	.addWelcomePages(new String[] {"index.cfm","index.cfml","index.html","index.htm"})
-            	.addServlets(
-	                        servlet("CFMLServlet", cfmlServlet)
-	                                .addInitParam("configuration",webConfigDir)
-	                                .addInitParam("railo-server-root",serverConfigDir)
-	                                .addMapping("*.cfm")
-	                                .addMapping("*.cfc")
-	                                .addMapping("/index.cfc/*")
-	                                .addMapping("/index.cfm/*")
-	                                .addMapping("/index.cfml/*")
-	                                .setLoadOnStartup(1)
-	                                ,
-	                        servlet("RESTServlet", restServlet)
-	                                .addInitParam("railo-web-directory",webConfigDir)
-	                                .addMapping("/rest/*")
-	                                .setLoadOnStartup(2));
+
 //			servletBuilder.setResourceManager(new CFMLResourceManager(new File(homeDir,"server/"), 100, cfmlDirs));
 			File internalRailoRoot = new File(webinfDir);
 			internalRailoRoot.mkdirs();
 			servletBuilder.setResourceManager(new CFMLResourceManager(warFile, 100, cfmlDirs, internalRailoRoot));
+
+			if(webXmlFile != null){
+				log.debug("using specified web.xml : " + webXmlFile.getAbsolutePath());
+				servletBuilder.setClassLoader(_classLoader);
+				UndertowWebXMLParser.parseWebXml(webXmlFile, servletBuilder);
+			} else {
+				servletBuilder.setClassLoader(Start.class.getClassLoader());
+				Class cfmlServlet;
+				Class restServlet;
+				try{
+					cfmlServlet = servletBuilder.getClass().getClassLoader().loadClass("railo.loader.servlet.CFMLServlet");
+				} catch (java.lang.ClassNotFoundException e) {
+					cfmlServlet = _classLoader.loadClass("railo.loader.servlet.CFMLServlet");
+				}
+				try{
+					restServlet = servletBuilder.getClass().getClassLoader().loadClass("railo.loader.servlet.RestServlet");
+				} catch (java.lang.ClassNotFoundException e) {
+					restServlet = _classLoader.loadClass("railo.loader.servlet.RestServlet");
+				}
+				log.debug("loaded servlet classes");
+				servletBuilder
+	            	.addWelcomePages(new String[] {"index.cfm","index.cfml","index.html","index.htm"})
+	            	.addServlets(
+		                        servlet("CFMLServlet", cfmlServlet)
+		                                .addInitParam("configuration",railoConfigWebDir)
+		                                .addInitParam("railo-server-root",railoConfigServerDir)
+		                                .addMapping("*.cfm")
+		                                .addMapping("*.cfc")
+		                                .addMapping("/index.cfc/*")
+		                                .addMapping("/index.cfm/*")
+		                                .addMapping("/index.cfml/*")
+		                                .setLoadOnStartup(1)
+		                                ,
+		                        servlet("RESTServlet", restServlet)
+		                                .addInitParam("railo-web-directory",railoConfigWebDir)
+		                                .addMapping("/rest/*")
+		                                .setLoadOnStartup(2));
+	        }
 		} else if(webinf.exists()) {
+			log.debug("Using existing WEB-INF:" + webinf.getAbsolutePath());
 			if(_classLoader == null) {
-				throw new RuntimeException("FATAL: Could not load any libs for war: " + warFile.getAbsolutePath());				
+				throw new RuntimeException("FATAL: Could not load any libs for war: " + warFile.getAbsolutePath());
 			}
 			servletBuilder.setClassLoader(_classLoader);
 			servletBuilder.setResourceManager(new CFMLResourceManager(warFile, 100, cfmlDirs, webinf));
+			subvertLoggers(loglevel, loggers);
 			UndertowWebXMLParser.parseWebXml(new File(webinf,"/web.xml"), servletBuilder);
 		} else {
 			throw new RuntimeException("Didn't know how to handle war:"+warFile.getAbsolutePath());
@@ -367,10 +385,13 @@ public class Start {
         java.util.logging.Level LEVEL = java.util.logging.Level.parse(level);
         chandler.setLevel(LEVEL);
 		java.util.logging.LogManager logManager = java.util.logging.LogManager.getLogManager();
+        log.debugf("subverting for %s",LEVEL);
 		for(Enumeration<String> loggerNames = logManager.getLoggerNames(); loggerNames.hasMoreElements();){
 	        String name = loggerNames.nextElement();
 	        java.util.logging.Logger nextLogger = logManager.getLogger(name);
+            log.debugf("checking if we need to subvert %s",name);
 	        if(loggers.contains(name) && nextLogger != null) {
+	            log.debugf("subverting logging for %s",name);
 	        	nextLogger.setUseParentHandlers(false);
 	        	nextLogger.setLevel(LEVEL);
 	        	if(nextLogger.getHandlers() != null) {
@@ -413,7 +434,7 @@ public class Start {
 				String fileName = item.getAbsolutePath();
 				if (!item.isDirectory()) {
 					if (fileName.toLowerCase().endsWith(".jar") || fileName.toLowerCase().endsWith(".zip")) {
-						if(!fileName.toLowerCase().contains("servlet") && !fileName.toLowerCase().contains("runwar")) {
+						if(!fileName.toLowerCase().contains("servlet")) {
 							URL url = item.toURI().toURL();
 							classpath.add(url);
 //							System.out.println("lib: added to classpath: "+fileName);
@@ -425,6 +446,25 @@ public class Start {
 		return classpath;
 	}
 
+	private static List<URL> getClassesList(String classesDir) throws IOException {
+		List<URL> classpath=new ArrayList<URL>();
+		if(classesDir == null)
+			return classpath;
+		File file = new File(classesDir);
+		if(file.exists() && file.isDirectory()) {
+			for(File item : file.listFiles()) {
+				String fileName = item.getAbsolutePath();
+				if (!item.isDirectory()) {
+					URL url = item.toURI().toURL();
+					classpath.add(url);
+				}				
+			}
+		} else {
+			log.debug("WEB-INF classes directory ("+file.getAbsolutePath()+") does not exist");
+		}
+		return classpath;
+	}
+	
 	protected static void initClassLoader(List<URL> _classpath) {
 		if (_classLoader == null && _classpath != null && _classpath.size() > 0) {
 			/*
@@ -436,6 +476,7 @@ public class Start {
 			Thread.currentThread().setContextClassLoader(_classLoader);
 			System.out.println("OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOUT"+_classpath.size());
 			*/
+			log.debugf("classpath: %s",_classpath);
 			_classLoader = new URLClassLoader(_classpath.toArray(new URL[_classpath.size()]),Thread.currentThread().getContextClassLoader());
 			//Thread.currentThread().setContextClassLoader(_classLoader);
 		}
@@ -571,8 +612,35 @@ public class Start {
 				.withDescription( "tray icon and OS X dock icon png image" )
 				.hasArg().withArgName("path")
 				.create("icon") );
+
+		options.addOption( OptionBuilder
+				.withLongOpt( "webxmlpath" )
+				.withDescription( "full path to default web.xml file for configuring the server" )
+				.hasArg().withArgName("path")
+				.create("webxmlpath") );
+		
+		options.addOption( OptionBuilder
+				.withLongOpt( "railoweb" )
+				.withDescription( "full path to railo web config directory" )
+				.hasArg().withArgName("path")
+				.create("railoweb") );
+		
+		options.addOption( OptionBuilder
+				.withLongOpt( "railoserver" )
+				.withDescription( "full path to railo server config directory" )
+				.hasArg().withArgName("path")
+				.create("railoserver") );
+		
+		options.addOption( OptionBuilder.withArgName( "property=value" )
+				.withLongOpt( "sysprop" )
+                .hasArgs(2)
+                .withValueSeparator()
+				.withDescription( "system property to set" )
+				.create("D") );
+		
 		
 		options.addOption( new Option( "h", "help", false, "print this message" ) );
+
 
 		try {
 			CommandLine line = parser.parse( options, args );
@@ -584,9 +652,14 @@ public class Start {
 		    	background = Boolean.valueOf(line.getOptionValue("background"));
 		    }
 		    if (line.hasOption("libs")) {
-                File lib = new File(line.getOptionValue("libs"));
-                if (!lib.exists() || !lib.isDirectory())
-                	printUsage("No such lib directory "+lib,1);
+		    	String[] list = line.getOptionValue("libs").split(",");
+
+		    	for (String path : list) {
+                	File lib = new File(path);
+	                if (!lib.exists() || !lib.isDirectory())
+	                	printUsage("No such lib directory "+path,1);
+		    	}               
+                
                 libDirs = line.getOptionValue("libs");
             }
 
@@ -614,6 +687,25 @@ public class Start {
 		    } else if (!line.hasOption("stop")) {
 		    	printUsage("Must specify -war path/to/war, or -stop [-stop-socket]",1);
 		    } 
+		    if(line.hasOption("D")){
+		    	final String[] properties = line.getOptionValues("D");
+		    	for (int i = 0; i < properties.length; i++) {
+					log.debugf("setting system property: %s", properties[i].toString()+'='+properties[i+1].toString());
+		    		System.setProperty(properties[i].toString(),properties[i+1].toString());
+		    		i++;
+		    	}
+		    }
+
+		    if (line.hasOption("webxmlpath")) {
+		    	webXmlPath = line.getOptionValue("webxmlpath");
+		    	webXmlFile = new File(webXmlPath);
+		    	if(webXmlFile.exists()) {
+		    		webXmlPath = webXmlFile.toURI().toURL().toString();
+		    	} else {
+		    		throw new RuntimeException("Could not find web.xml! " + webXmlPath);
+		    	}
+		    }
+
 		    if (line.hasOption("stop")) {
 		    	if(line.getOptionValue("stop")!=null) {
 		    		socketNumber = Integer.parseInt(line.getOptionValue("stop")); 
@@ -685,6 +777,13 @@ public class Start {
 
 		    if (line.hasOption("icon")) {
 		    	iconImage  = line.getOptionValue("icon");
+		    }
+
+		    if (line.hasOption("railoserver")) {
+		    	railoConfigServerDir  = line.getOptionValue("railoserver");
+		    }
+		    if (line.hasOption("railoweb")) {
+		    	railoConfigWebDir  = line.getOptionValue("railoweb");
 		    }
 		    return line;
 		}
