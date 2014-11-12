@@ -1,4 +1,4 @@
-package runwar;
+package runwar.undertow;
 
 import java.io.File;
 import java.util.HashMap;
@@ -16,7 +16,7 @@ import io.undertow.servlet.api.ServletInfo;
 import java.util.EventListener;
 import java.util.Map;
 
-import org.jboss.logging.Logger;
+import runwar.logging.Logger;
 
 import javax.servlet.Filter;
 import javax.servlet.Servlet;
@@ -26,9 +26,9 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-public class UndertowWebXMLParser {
+public class WebXMLParser {
 
-	private static Logger log = Logger.getLogger("io.undertow.UndertowLogger");
+    private static Logger log = Logger.getLogger("RunwarLogger");
 
 	/**
 	 * Parses the web.xml and configures the context.
@@ -42,6 +42,7 @@ public class UndertowWebXMLParser {
 			log.error("Error reading web.xml! exists:"+webxml.exists()+"readable:"+webxml.canRead());
 		}
 		try {
+		    trace("parsing %s",webxml.getCanonicalPath());
 			DocumentBuilderFactory docBuilderFactory = DocumentBuilderFactory.newInstance();
 			DocumentBuilder docBuilder = docBuilderFactory.newDocumentBuilder();
 			Document doc = docBuilder.parse(webxml);
@@ -230,6 +231,7 @@ public class UndertowWebXMLParser {
 							servlet.setLoadOnStartup(Integer.valueOf(pLoad));
 						}
 					}
+					servlet.setRequireWelcomeFileMapping(true);
 					// do init-param - available in the context of a servlet
 					// or filter in the web application
 					listOfElements = fstElmnt.getElementsByTagName("init-param");
